@@ -1,0 +1,6 @@
+Google MediaPipe face models, expression graph and landmark subset:
+Copyright Google LLC. Apache License 2.0.
+Face mesh ONNX export: Yakhyokhuja Valikhujaev (yakhyo), Apache-2.0.
+Blendshape ONNX conversion: fernandotonon/QtMeshEditor, Apache-2.0.
+YuNet: OpenCV Zoo / libfacedetection contributors, MIT.
+See README.md for source/model URLs and the accompanying license texts.

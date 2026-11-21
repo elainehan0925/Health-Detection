@@ -1,0 +1,9 @@
+{
+  "blink_rate_per_minute": 0.000,
+  "baseline_blinks_per_minute": 18.738,
+  "yawn_rate_per_minute": 0.000,
+  "baseline_yawns_per_minute": 0.181,
+  "eyes_closure_total_seconds": 23.424,
+  "yawn_count": 3,
+  "rest_seconds_last_20_minutes": 220.059
+}
