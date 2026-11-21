@@ -15,6 +15,8 @@ lock=threading.Lock()
 complete_data=[]
 typing_speed=0
 elapsed_time=0
+last_key_pressed_time=0
+activity=False
 
 #process at each key press
 def on_press(key):
@@ -28,6 +30,13 @@ def on_press(key):
         #update current time
         current=time.perf_counter()
         interval_e=current
+
+        #if key pressed, activity is true 
+        activity=True
+
+        #update the last_key_pressed_time to the last key in interval
+        if(current>last_key_pressed):
+            last_key_pressed=current
 
         #calculations for the active type time
         #inactive threshold is 0.5s 
@@ -87,7 +96,10 @@ while(True):
                 "Number of errors made: ": error_count,
                 "Active typing time: ": type_time,
                 "Average typing speed: ": typing_speed,
+                "Last key press time: ": last_key_pressed_time,
+                "Activity: ": activity,
                 "Interval end time: ": end
+
             }
             complete_data.append(data)
 
