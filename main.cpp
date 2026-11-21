@@ -6,17 +6,190 @@ using namespace std;
 #include <chrono>
 #include <limits>
 #include <algorithm>
+#include "json.hpp"
 
-double calculate_weight();
-double continuous_work();
-double read_json();
+using json = nlohmann::json;
 
-int main(){
+void continuous_work(bool keyboard_activity, bool mouse_activity,
+                       bool person_present, double& worktime, double& resttime);
+bool readData(ifstream &inFile, json &latest);
+double calculate_keyboard(double err_percentage, double typingSpeedScore);
+double error_percentage_keyboard(bool kDataRead, bool activity, double error_count, double count);
+double typing_speed_score(bool kDataRead, bool activity, double type_time, double typing_speed, double end);
+double calculate_mouse(double mouseSpeedScore, double clickSpeedScore);
+double mouse_speed_score(bool mDataRead, bool activity, double total_moving_time, double mouse_speed);
+double click_speed_score(bool mDataRead, bool activity, double total_click_speed);
 
+int main() {
+    int increment=0;
+  auto next_update = chrono::steady_clock::now();
+  double worktime=0.0;
+  double resttime=0.0;
+  double worktime_score=1.0;
+
+  // get data every 5 seconds
+  while (true) {
+    if(increment==360){
+        if(resttime>=300){
+            worktime_score=0.0;
+        }
+        else{
+            worktime_score=1.0;
+        }
+        worktime=0.0;
+        resttime=0.0;
+        increment=0;
+    }
+    ifstream inFileK("keyboard.json");
+    ifstream inFileM("mouse.json");
+    ifstream inFileP("posture.json");
+    ifstream inFileB("blink.json");
+
+    bool kDataRead = false;
+    bool mDataRead = false;
+    bool pDataRead = false;
+    bool bDataRead = false;
+
+    // keyboard variables
+    json latestK;
+    double count;
+    double error_count;
+    double type_time;
+    double typing_speed;
+    double interval_end;
+    double last_key_pressed_time;
+    bool activityK;
+
+    // read keyboard input
+
+    if (readData(inFileK, latestK)) {
+      kDataRead = true;
+      count = latestK.at("Number of keys entered: ").get<double>();
+      error_count = latestK.at("Number of errors made: ").get<double>();
+      type_time = latestK.at("Active typing time: ").get<double>();
+      typing_speed = latestK.at("Average typing speed: ").get<double>();
+      interval_end = latestK.at("Interval end time: ").get<double>();
+      last_key_pressed_time = latestK.at("Last key press time: ").get<double>();
+      activityK = latestK.at("Activity: ").get<bool>();
+    }
+
+    // mouse variables
+    json latestM;
+    double moving_time;
+    double total_distance;
+    double average_speed;
+    double left_clicks;
+    double right_clicks;
+    double left_click_speed;
+    double right_click_speed;
+    double total_click_speed;
+    double last_mouse_time;
+    bool activityM;
+
+    // read mouse input
+    if (readData(inFileM, latestM)) {
+      mDataRead = true;
+      moving_time = latestM.at("total_moving_time: ").get<double>();
+      total_distance = latestM.at("total_distance: ").get<double>();
+      average_speed = latestM.at("average_speed: ").get<double>();
+      left_clicks = latestM.at("left_clicks: ").get<double>();
+      right_clicks = latestM.at("right_clicks: ").get<double>();
+      left_click_speed = latestM.at("left_click_speed: ").get<double>();
+      right_click_speed = latestM.at("right_click_speed: ").get<double>();
+      total_click_speed = latestM.at("total_click_speed: ").get<double>();
+      last_mouse_time = latestM.at("last_activity_time: ").get<double>();
+      activityM = latestM.at("activity: ").get<bool>();
+    }
+
+    // posture variables
+    json latestP;
+    double goodToBad;
+    double goodTime;
+    double badTime;
+    bool reallyBadPosture;
+    bool personThere;
+    double time;
+
+    // read posture input
+    if (readData(inFileP, latestP)) {
+      pDataRead = true;
+      goodToBad = latestP.at("goodToBad: ").get<double>();
+      goodTime = latestP.at("goodTime: ").get<double>();
+      badTime = latestP.at("badTime: ").get<double>();
+      reallyBadPosture = latestP.at("reallyBadPosture: ").get<bool>();
+      personThere = latestP.at("personThere: ").get<bool>();
+      time = latestP.at("time: ").get<double>();
+    }
+
+    // blink variables
+    json latestB;
+    double blink_rate_per_minute;
+    double baseline_blinks_per_minute;
+    double yawn_rate_per_minute;
+    double baseline_yawns_per_minute;
+    double eye_closure_total_seconds;
+    double yawn_count;
+    double rest_seconds_last_20_minutes;
+
+    // read blink input
+    if (readData(inFileB, latestB)) {
+      bDataRead = true;
+      blink_rate_per_minute =
+          latestB.at("blink_rate_per_minute: ").get<double>();
+      baseline_blinks_per_minute =
+          latestB.at("baseline_blinks_per_minute: ").get<double>();
+      yawn_rate_per_minute = latestB.at("yawn_rate_per_minute: ").get<double>();
+      baseline_yawns_per_minute =
+          latestB.at("baseline_yawns_per_minute: ").get<double>();
+      eye_closure_total_seconds =
+          latestB.at("eye_closure_total_seconds: ").get<double>();
+      yawn_count = latestB.at("yawn_count: ").get<double>();
+      rest_seconds_last_20_minutes =
+          latestB.at("rest_seconds_last_20_minutes: ").get<double>();
+    }
+
+    if(kDataRead&&mDataRead&&pDataRead){
+        continuous_work(activityK, activityM, personThere, worktime, resttime);
+    }
+
+    next_update += chrono::seconds(5);
+    this_thread::sleep_until(next_update);
+    increment++;
+  }
 }
 
-double continuous_work(){
-    //a while that did not move mouse, or by keyboard
+bool readData(ifstream &inFile, json &latest) {
+  if (inFile.fail()) {
+    cout << "data could not be accessed" << endl;
+    return false;
+  }
+  try {
+    json data;
+    inFile >> data;
+
+    if (!data.is_array() || data.empty()) {
+      cout << "No data available" << endl;
+      return false;
+    }
+
+    latest = data.back();
+    return true;
+  } catch (json::exception &error) {
+    cout << "could not read json" << endl;
+    return false;
+  }
+}
+
+void continuous_work(bool keyboard_activity, bool mouse_activity,
+                       bool person_present, double& worktime, double& resttime) {
+  
+  if ((keyboard_activity == false && mouse_activity == false) &&
+      (person_present == false)) {
+    resttime += 5;
+  }
+  else{
+    worktime+=5;
+  }
 }
 
 double calculate_keyboard(double err_percentage, double typingSpeedScore){
