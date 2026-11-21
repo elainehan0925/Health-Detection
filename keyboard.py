@@ -26,6 +26,8 @@ def on_press(key):
         global interval_s
         global interval_e
         global type_time
+        global last_key_pressed_time
+        global activity
 
         #update current time
         current=time.perf_counter()
@@ -35,8 +37,7 @@ def on_press(key):
         activity=True
 
         #update the last_key_pressed_time to the last key in interval
-        if(current>last_key_pressed):
-            last_key_pressed=current
+        last_key_pressed_time=current
 
         #calculations for the active type time
         #inactive threshold is 0.5s 
@@ -111,6 +112,7 @@ while(True):
             count=0
             error_count=0
             type_time=0
+            activity=False
 
         #print to json file
         # temp json used so that while writing, it will not be empty to access    
