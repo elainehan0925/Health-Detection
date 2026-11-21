@@ -1,22 +1,30 @@
-#include <cmath>
-#include <fstream>
-#include <iostream>
-using namespace std;
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#endif
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
 #include <limits>
+#include <stdexcept>
 #include <thread>
+#include <utility>
+using namespace std;
 
 #include "json.hpp"
 #include "posture_fatigue.h"
 #include "eye_fatigue.h"
 
-
 using json = nlohmann::json;
 
 void continuous_work(bool keyboard_activity, bool mouse_activity,
-                     bool person_present, double &worktime, double &resttime);
-bool readData(ifstream &inFile, json &latest);
+                     bool person_present, double elapsed,
+                     double &worktime, double &resttime);
+bool readData(ifstream &inFile, json &latest, const char* filename,
+              filesystem::file_time_type* written_at = nullptr);
 double calculate_keyboard(double err_percentage, double typingSpeedScore);
 double error_percentage_keyboard(bool kDataRead, bool activity,
                                  double error_count, double count);
@@ -25,228 +33,242 @@ double typing_speed_score(bool kDataRead, bool activity, double type_time,
 double calculate_mouse(double mouseSpeedScore, double clickSpeedScore);
 double mouse_speed_score(bool mDataRead, bool activity,
                          double total_moving_time, double mouse_speed);
-double click_speed_score(bool mDataRead, bool activity,
-                         double total_click_speed);
+double click_speed_score(bool mDataRead, bool activity, double total_click_speed);
 
 int main() {
-  int increment = 0;
   auto next_update = chrono::steady_clock::now();
+  auto last_check = next_update;
+  auto window_start = next_update;
   double worktime = 0.0;
   double resttime = 0.0;
-  double worktime_score = 1.0;
-  double keyboardScore = 0;
-  double mouseScore = 0;
-  double postureScore = 0;
-  double blinkScore = 0;
-  double totalScore = 0;
-  PostureFatigueTracker postureTracker;
+  const double unavailable = numeric_limits<double>::quiet_NaN();
+  double worktime_score = unavailable;
+  double keyboardScore = unavailable;
+  double mouseScore = unavailable;
+  double postureScore = unavailable;
+  double blinkScore = unavailable;
+  json previousK;
+  auto previousMouseWrite = filesystem::file_time_type::min();
 
-  // get data every 5 seconds
+  // Read the latest measurements and write a score every five seconds.
   while (true) {
-    if (increment == 360) {
-      if (resttime >= 300) {
-        worktime_score = 0.0;
-      } else {
-        worktime_score = 1.0;
-      }
-      worktime = 0.0;
-      resttime = 0.0;
-      increment = 0;
-    }
     ifstream inFileK("keyboard.json");
     ifstream inFileM("mouse.json");
     ifstream inFileP("posture.json");
     ifstream inFileB("blink.json");
+    bool kDataRead = false, mDataRead = false, pDataRead = false;
+    bool activityK = false, activityM = false, personThere = false;
+    json latestK, latestM, latestP, latestB;
 
-    bool kDataRead = false;
-    bool mDataRead = false;
-    bool pDataRead = false;
-    bool bDataRead = false;
-
-    // keyboard variables
-    json latestK;
-    double count;
-    double error_count;
-    double type_time;
-    double typing_speed;
-    double interval_end;
-    double last_key_pressed_time;
-    bool activityK;
-
-    // read keyboard input
-
-    if (readData(inFileK, latestK)) {
-      kDataRead = true;
-      count = latestK.at("Number of keys entered: ").get<double>();
-      error_count = latestK.at("Number of errors made: ").get<double>();
-      type_time = latestK.at("Active typing time: ").get<double>();
-      typing_speed = latestK.at("Average typing speed: ").get<double>();
-      interval_end = latestK.at("Interval end time: ").get<double>();
-      last_key_pressed_time = latestK.at("Last key press time: ").get<double>();
-      activityK = latestK.at("Activity: ").get<bool>();
-    }
-
-    // mouse variables
-    json latestM;
-    double moving_time;
-    double total_distance;
-    double average_speed;
-    double left_clicks;
-    double right_clicks;
-    double left_click_speed;
-    double right_click_speed;
-    double total_click_speed;
-    double last_mouse_time;
-    bool activityM;
-
-    // read mouse input
-    if (readData(inFileM, latestM)) {
-      mDataRead = true;
-      moving_time = latestM.at("total_moving_time: ").get<double>();
-      total_distance = latestM.at("total_distance: ").get<double>();
-      average_speed = latestM.at("average_speed: ").get<double>();
-      left_clicks = latestM.at("left_clicks: ").get<double>();
-      right_clicks = latestM.at("right_clicks: ").get<double>();
-      left_click_speed = latestM.at("left_click_speed: ").get<double>();
-      right_click_speed = latestM.at("right_click_speed: ").get<double>();
-      total_click_speed = latestM.at("total_click_speed: ").get<double>();
-      last_mouse_time = latestM.at("last_activity_time: ").get<double>();
-      activityM = latestM.at("activity: ").get<bool>();
-    }
-
-    // posture variables
-    json latestP;
-    double goodToBad;
-    double goodTime;
-    double badTime;
-    bool reallyBadPosture;
-    bool personThere;
-    double time;
-
-    // read posture input
-    if (readData(inFileP, latestP)) {
-      pDataRead = true;
-      goodToBad = latestP.at("goodToBad: ").get<double>();
-      goodTime = latestP.at("goodTime: ").get<double>();
-      badTime = latestP.at("badTime: ").get<double>();
-      reallyBadPosture = latestP.at("reallyBadPosture: ").get<bool>();
-      personThere = latestP.at("personThere: ").get<bool>();
-      time = latestP.at("time: ").get<double>();
-    }
-
-    // blink variables
-    json latestB;
-    double blink_rate_per_minute;
-    double baseline_blinks_per_minute;
-    double yawn_rate_per_minute;
-    double baseline_yawns_per_minute;
-    double eye_closure_total_seconds;
-    double yawn_count;
-    double rest_seconds_last_20_minutes;
-
-    // read blink input
-    if (readData(inFileB, latestB)) {
-      bDataRead = true;
-      blink_rate_per_minute =
-          latestB.at("blink_rate_per_minute: ").get<double>();
-      baseline_blinks_per_minute =
-          latestB.at("baseline_blinks_per_minute: ").get<double>();
-      yawn_rate_per_minute = latestB.at("yawn_rate_per_minute: ").get<double>();
-      baseline_yawns_per_minute =
-          latestB.at("baseline_yawns_per_minute: ").get<double>();
-      eye_closure_total_seconds =
-          latestB.at("eye_closure_total_seconds: ").get<double>();
-      yawn_count = latestB.at("yawn_count: ").get<double>();
-      rest_seconds_last_20_minutes =
-          latestB.at("rest_seconds_last_20_minutes: ").get<double>();
-    }
-
-    if (kDataRead && mDataRead && pDataRead) {
-      continuous_work(activityK, activityM, personThere, worktime, resttime);
-    }
-    if (kDataRead) {
-      double err_percentage =
-          error_percentage_keyboard(kDataRead, activityK, error_count, count);
-      double typingSpeedScore = typing_speed_score(
-          kDataRead, activityK, type_time, typing_speed, interval_end);
-      keyboardScore = calculate_keyboard(err_percentage, typingSpeedScore);
-    }
-    if (mDataRead) {
-      double mouseSpeedScore =
-          mouse_speed_score(mDataRead, activityM, moving_time, average_speed);
-      double clickSpeedScore =
-          click_speed_score(mDataRead, activityM, total_click_speed);
-      mouseScore = calculate_mouse(mouseSpeedScore, clickSpeedScore);
-    }
-    if (pDataRead) {
-      PostureFatigue result =
-          calculatePostureFatigue(goodTime, badTime, reallyBadPosture);
-
-      if (result.status == "ok") {
-        postureScore = result.index;
+    if (readData(inFileK, latestK, "keyboard.json")) {
+      try {
+        double count = latestK.at("Number of keys entered: ").get<double>();
+        double error_count = latestK.at("Number of errors made: ").get<double>();
+        double type_time = latestK.at("Active typing time: ").get<double>();
+        double typing_speed = latestK.at("Average typing speed: ").get<double>();
+        double interval_end = latestK.at("Interval end time: ").get<double>();
+        if (!isfinite(count) || !isfinite(error_count) || !isfinite(type_time) ||
+            !isfinite(typing_speed) || !isfinite(interval_end) || count < 0 ||
+            error_count < 0 || error_count > count || type_time < 0 || typing_speed < 0) {
+          throw runtime_error("invalid keyboard measurements");
+        }
+        // Older keyboard records have no Activity field. A press establishes activity.
+        activityK = latestK.value("Activity: ", false) || count > 0;
+        kDataRead = true;
+        if (previousK.is_null() || interval_end !=
+            previousK.at("Interval end time: ").get<double>()) {
+          if (!activityK) {
+            keyboardScore = 0.0;
+          } else {
+            double errors = error_percentage_keyboard(true, activityK, error_count, count);
+            double speed = typing_speed_score(true, activityK, type_time,
+                                              typing_speed, interval_end);
+            keyboardScore = calculate_keyboard(errors, speed);
+          }
+          previousK = latestK;
+        }
+      } catch (const exception &error) {
+        cerr << "Keyboard data: " << error.what() << '\n';
+        kDataRead = false;
       }
     }
-    blinkScore = numeric_limits<double>::quiet_NaN();
-    if (bDataRead) {
-      EyeFatigue result = calculateEyeFatigue(
-          blink_rate_per_minute, baseline_blinks_per_minute,
-          yawn_rate_per_minute, baseline_yawns_per_minute,
-          rest_seconds_last_20_minutes);
+    if (!kDataRead) keyboardScore = unavailable;
 
-      if (result.status == "ok") {
-        blinkScore = result.index;
+    filesystem::file_time_type mouseWritten;
+    if (readData(inFileM, latestM, "mouse.json", &mouseWritten)) {
+      try {
+        double moving_time = latestM.at("total_moving_time: ").get<double>();
+        double average_speed = latestM.at("average_speed: ").get<double>();
+        double total_click_speed = latestM.at("total_click_speed: ").get<double>();
+        if (!isfinite(moving_time) || !isfinite(average_speed) ||
+            !isfinite(total_click_speed) || moving_time < 0 ||
+            average_speed < 0 || total_click_speed < 0) {
+          throw runtime_error("invalid mouse measurements");
+        }
+        activityM = latestM.at("activity: ").get<bool>() ||
+                    moving_time > 0 || total_click_speed > 0;
+        mDataRead = true;
+        if (mouseWritten != previousMouseWrite) {
+          if (!activityM) {
+            mouseScore = 0.0;
+          } else {
+            // Clicking without movement, or moving without clicks, is valid activity.
+            double movement = moving_time > 0
+                ? mouse_speed_score(true, true, moving_time, average_speed) : 0.0;
+            double clicks = total_click_speed > 0
+                ? click_speed_score(true, true, total_click_speed) : 0.0;
+            mouseScore = calculate_mouse(movement, clicks);
+          }
+          previousMouseWrite = mouseWritten;
+        }
+      } catch (const exception &error) {
+        cerr << "Mouse data: " << error.what() << '\n';
+        mDataRead = false;
       }
     }
-    totalScore = 0.2 * keyboardScore + 0.2 * mouseScore + 0.2 * postureScore +
-                 0.2 * blinkScore + 0.2 * worktime_score;
+    if (!mDataRead) mouseScore = unavailable;
+
+    postureScore = unavailable;
+    if (readData(inFileP, latestP, "posture.json")) {
+      try {
+        personThere = latestP.at("personThere: ").get<bool>();
+        pDataRead = latestP.value("tracking_working: ", true);
+        double goodTime = latestP.at("goodTime: ").get<double>();
+        double badTime = latestP.at("badTime: ").get<double>();
+        double reallybadTime = latestP.at("reallybadTime: ").get<double>();
+        PostureFatigue result = calculatePostureFatigue(goodTime, badTime, reallybadTime);
+        if (pDataRead && result.status == "ok") postureScore = result.index;
+      } catch (const exception &error) {
+        cerr << "Posture data: " << error.what() << '\n';
+        pDataRead = false;
+      }
+    }
+
+    blinkScore = unavailable;
+    if (readData(inFileB, latestB, "blink.json")) {
+      try {
+        EyeFatigue result = calculateEyeFatigue(
+            latestB.at("blink_rate_per_minute: ").get<double>(),
+            latestB.at("baseline_blinks_per_minute: ").get<double>(),
+            latestB.at("yawn_rate_per_minute: ").get<double>(),
+            latestB.at("baseline_yawns_per_minute: ").get<double>(),
+            latestB.at("rest_seconds_last_20_minutes: ").get<double>());
+        if (result.status == "ok") blinkScore = result.index;
+      } catch (const exception &error) {
+        cerr << "Blink data: " << error.what() << '\n';
+      }
+    }
+
+    auto now = chrono::steady_clock::now();
+    double elapsed = chrono::duration<double>(now - last_check).count();
+    last_check = now;
+    bool work_observed = kDataRead && mDataRead && pDataRead && elapsed <= 15.0;
+    if (work_observed) {
+      continuous_work(activityK, activityM, personThere, elapsed, worktime, resttime);
+    }
+    double window_seconds = chrono::duration<double>(now - window_start).count();
+    if (window_seconds >= 1800.0) {
+      // Preserve the five-total-minutes-of-rest rule for each thirty-minute period.
+      if (resttime >= 300.0) worktime_score = 0.0;
+      else if (worktime + resttime >= window_seconds - 1.0) worktime_score = 1.0;
+      else worktime_score = unavailable;
+      worktime = 0.0;
+      resttime = 0.0;
+      window_start = now;
+    }
 
     json output;
-    output["systemic_fatigue_score"] = totalScore;
+    output["components"] = json::object();
+    double score_sum = 0.0;
+    int available_count = 0;
+    // Equal weights become 20% each when all five components are available.
+    for (const auto &component : {
+             pair<const char*, double>{"keyboard", keyboardScore},
+             {"mouse", mouseScore}, {"posture", postureScore},
+             {"blink", blinkScore}, {"work_rest", worktime_score}}) {
+      if (isfinite(component.second) && component.second >= 0 && component.second <= 1) {
+        output["components"][component.first] = component.second;
+        score_sum += component.second;
+        available_count++;
+      } else {
+        output["components"][component.first] = nullptr;
+      }
+    }
+    output["systemic_fatigue_score"] = available_count > 0
+        ? json(clamp(100.0 * score_sum / available_count, 0.0, 100.0)) : json(nullptr);
+    output["status"] = available_count == 0 ? "insufficient_data" : "ok";
+    output["available_components"] = available_count;
+    output["timestamp"] = chrono::duration<double>(
+        chrono::system_clock::now().time_since_epoch()).count();
 
-    ofstream outFile("metrics.json");
-
-    if (outFile) {
-      outFile << output.dump(4) << '\n';
+    // Publish only a complete JSON document, including when readers run concurrently.
+    ofstream outFile("metrics.tmp", ios::trunc);
+    outFile << output.dump(4) << '\n';
+    outFile.close();
+    if (!outFile) {
+      cerr << "Could not write metrics.tmp\n";
     } else {
-      cerr << "Could not write metrics.json\n";
+#ifdef _WIN32
+      if (!MoveFileExW(L"metrics.tmp", L"metrics.json", MOVEFILE_REPLACE_EXISTING))
+        cerr << "Could not replace metrics.json\n";
+#else
+      error_code error;
+      filesystem::rename("metrics.tmp", "metrics.json", error);
+      if (error) cerr << "Could not replace metrics.json: " << error.message() << '\n';
+#endif
     }
 
     next_update += chrono::seconds(5);
+    if (next_update <= chrono::steady_clock::now()) {
+      next_update = chrono::steady_clock::now() + chrono::seconds(5);
+    }
     this_thread::sleep_until(next_update);
-    increment++;
   }
 }
 
-bool readData(ifstream &inFile, json &latest) {
-  if (inFile.fail()) {
-    cout << "data could not be accessed" << endl;
-    return false;
-  }
+bool readData(ifstream &inFile, json &latest, const char* filename,
+              filesystem::file_time_type* written_at) {
+  if (!inFile) return false;
+  error_code error;
+  auto written = filesystem::last_write_time(filename, error);
+  if (error) return false;
+  double age = chrono::duration<double>(filesystem::file_time_type::clock::now() - written).count();
+  if (age > 15.0 || age < -5.0) return false;
   try {
     json data;
     inFile >> data;
-
-    if (!data.is_array() || data.empty()) {
-      cout << "No data available" << endl;
-      return false;
+    if (data.is_array()) {
+      if (data.empty()) return false;
+      latest = data.back();
+    } else {
+      latest = data;
     }
-
-    latest = data.back();
+    if (!latest.is_object() || latest.empty()) return false;
+    // Accept both Python's existing labels with ': ' and ordinary JSON field names.
+    json normalized = json::object();
+    for (auto it = latest.begin(); it != latest.end(); ++it) {
+      string key = it.key();
+      while (!key.empty() && (key.back() == ' ' || key.back() == ':')) key.pop_back();
+      if (normalized.contains(key + ": ")) {
+        cerr << "Ambiguous JSON fields in " << filename << '\n';
+        return false;
+      }
+      normalized[key + ": "] = it.value();
+    }
+    latest = normalized;
+    if (written_at) *written_at = written;
     return true;
-  } catch (json::exception &error) {
-    cout << "could not read json" << endl;
+  } catch (const json::exception &error) {
+    cerr << "Could not read " << filename << ": " << error.what() << '\n';
     return false;
   }
 }
 
 void continuous_work(bool keyboard_activity, bool mouse_activity,
-                     bool person_present, double &worktime, double &resttime) {
-  if ((keyboard_activity == false && mouse_activity == false) &&
-      (person_present == false)) {
-    resttime += 5;
-  } else {
-    worktime += 5;
-  }
+                     bool person_present, double elapsed,
+                     double &worktime, double &resttime) {
+  if (!keyboard_activity && !mouse_activity && !person_present) resttime += elapsed;
+  else worktime += elapsed;
 }
 
 double calculate_keyboard(double err_percentage, double typingSpeedScore) {
@@ -255,7 +277,6 @@ double calculate_keyboard(double err_percentage, double typingSpeedScore) {
   }
   double normalized_typing = min(abs(typingSpeedScore) / 3.0, 1.0);
   return 0.55 * err_percentage + 0.45 * normalized_typing;
-  // update avg time every 5 minutes
 }
 
 double error_percentage_keyboard(bool kDataRead, bool activity,
@@ -274,13 +295,17 @@ double typing_speed_score(bool kDataRead, bool activity, double type_time,
   double dev, z_score = numeric_limits<double>::quiet_NaN();
   static double M2 = 0;  // sum of squared derivations
   static int nth_interval = 0;
-  if (kDataRead && activity) {
+  if (kDataRead && activity && type_time > 0 && isfinite(end) &&
+      isfinite(typing_speed) && typing_speed >= 0) {
     // update avg_speed once received new data
     if (nth_interval >= 2) {
-      std_dev = sqrt(M2 / (nth_interval - 1));
+      std_dev = sqrt(max(0.0, M2) / (nth_interval - 1));
+      dev = typing_speed - avg_speed;
       if (std_dev > 0) {
-        dev = typing_speed - avg_speed;
-        z_score = dev / std_dev;  // z = (typing speed - avg speed) / std dev;
+        z_score = dev / std_dev;
+      } else {
+        // A constant baseline has no spread. Cap a new deviation at three sigma.
+        z_score = dev == 0 ? 0.0 : copysign(3.0, dev);
       }
     }
     if (nth_interval == 0) {
@@ -294,7 +319,7 @@ double typing_speed_score(bool kDataRead, bool activity, double type_time,
 
       M2 += delta * (typing_speed - avg_speed);
 
-      std_dev = sqrt(M2 / (nth_interval));
+      std_dev = sqrt(max(0.0, M2) / (nth_interval));
     }
     nth_interval++;
   }
@@ -308,7 +333,6 @@ double calculate_mouse(double mouseSpeedScore, double clickSpeedScore) {
   double normalized_mouse = min(abs(mouseSpeedScore) / 3.0, 1.0);
   double normalized_click = min(abs(clickSpeedScore) / 3.0, 1.0);
   return (0.6 * normalized_mouse + 0.4 * normalized_click);
-  // update avg time every 5 minutes
 }
 
 double mouse_speed_score(bool mDataRead, bool activity,
@@ -318,13 +342,16 @@ double mouse_speed_score(bool mDataRead, bool activity,
   double dev, z_score = numeric_limits<double>::quiet_NaN();
   static double M2 = 0;  // sum of squared derivations
   static int nth_interval = 0;
-  if (mDataRead && activity && total_moving_time > 0) {
+  if (mDataRead && activity && total_moving_time > 0 && isfinite(mouse_speed) && mouse_speed >= 0) {
     // update avg_speed once received new data
     if (nth_interval >= 2) {
-      std_dev = sqrt(M2 / (nth_interval - 1));
+      std_dev = sqrt(max(0.0, M2) / (nth_interval - 1));
+      dev = mouse_speed - avg_speed;
       if (std_dev > 0) {
-        dev = mouse_speed - avg_speed;
-        z_score = dev / std_dev;  // z = (typing speed - avg speed) / std dev;
+        z_score = dev / std_dev;
+      } else {
+        // A constant baseline has no spread. Cap a new deviation at three sigma.
+        z_score = dev == 0 ? 0.0 : copysign(3.0, dev);
       }
     }
     if (nth_interval == 0) {
@@ -337,7 +364,7 @@ double mouse_speed_score(bool mDataRead, bool activity,
 
       M2 += delta * (mouse_speed - avg_speed);
 
-      std_dev = sqrt(M2 / (nth_interval));
+      std_dev = sqrt(max(0.0, M2) / (nth_interval));
     }
     nth_interval++;
   }
@@ -351,13 +378,16 @@ double click_speed_score(bool mDataRead, bool activity,
   double dev, z_score = numeric_limits<double>::quiet_NaN();
   static double M2 = 0;  // sum of squared derivations
   static int nth_interval = 0;
-  if (mDataRead && activity) {
+  if (mDataRead && activity && isfinite(total_click_speed) && total_click_speed >= 0) {
     // update avg_speed once received new data
     if (nth_interval >= 2) {
-      std_dev = sqrt(M2 / (nth_interval - 1));
+      std_dev = sqrt(max(0.0, M2) / (nth_interval - 1));
+      dev = total_click_speed - avg_speed;
       if (std_dev > 0) {
-        dev = total_click_speed - avg_speed;
-        z_score = dev / std_dev;  // z = (typing speed - avg speed) / std dev;
+        z_score = dev / std_dev;
+      } else {
+        // A constant baseline has no spread. Cap a new deviation at three sigma.
+        z_score = dev == 0 ? 0.0 : copysign(3.0, dev);
       }
     }
     if (nth_interval == 0) {
@@ -375,39 +405,3 @@ double click_speed_score(bool mDataRead, bool activity,
   }
   return z_score;
 }
-/*
-double typing_speed_score(bool activity, double type_time, double typing_speed)
-{ static double avg_speed = 0; static double M2 = 0; static int count = 0;
-
-    double variance, std_dev, dev, z_score;
-
-    if (!activity || type_time <= 0) {
-        return 0;
-    }
-
-    // Calculate Z-score using previous data
-    if (count >= 2) {
-        variance = M2 / (count - 1);
-        std_dev = sqrt(variance);
-
-        if (std_dev > 0) {
-            dev = typing_speed - avg_speed;
-            z_score = dev / std_dev;
-        } else {
-            z_score = 0;
-        }
-    } else {
-        z_score = 0;
-    }
-
-    // Update mean and variance
-    count++;
-
-    double delta = typing_speed - avg_speed;
-    avg_speed += delta / count;
-    double delta2 = typing_speed - avg_speed;
-
-    M2 += delta * delta2;
-
-    return z_score;
-}*/
