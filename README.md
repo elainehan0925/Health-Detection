@@ -8,6 +8,10 @@ To calculate this score, the team implemented 5 main metrics to test on: mouse u
 
 Installation：
 Python: 
+
+Must download additional extensions, by running: pip install opencv-python mediapipe
+
+
 from pynput import keyboard
 import time 
 import json
@@ -32,3 +36,4 @@ Aadi Aggarwal
 
 Attributions：
 James Meng: designed mouse monitoring 
+Aadi Aggarwal: designed posture check (determining slump time, and if person if at their desk or not)
