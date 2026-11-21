@@ -6,17 +6,20 @@
 #include <cmath>
 using namespace std;
 
-//the main output that i want to collect: 
-//every 
 int main(){
     using Clock = chrono::steady_clock;
     auto start = Clock::now();
     bool first = true;
-    double distance = 0, moveTime = 0, totalDistance = 0;
+    double distance = 0, moveTime = 0, totalDistance = 0, intervalBegin = 0;
     int count, previousX, previousY, leftClickCount = 0, rightClickCount = 0;
     double previousTime = 0, avgSpeed = 0, instSpeed = 0, acceleration = 0, leftSpeed = 0, rightSpeed = 0, previousSpeed = 0;
     bool previousLeft = false, previousRight = false;
-    ofstream openFile("mouse_data.json");
+    double lastActivityTime = 0;
+
+    fstream openFile(
+        "mouse.json", 
+        ios::in | ios::out | ios::trunc
+    );
     if(openFile.fail()){
         cout << "Cannot open file" << endl;
         return 1;
@@ -24,14 +27,22 @@ int main(){
 
     POINT current;
     count = 0;
+    openFile << "{\n";
+    openFile << "\"intervals\": [\n";
+    // Remember where the closing ] begins
+    streampos insertPos = openFile.tellp();
+
+    // Close JSON
+    openFile << "\n]}\n";
+    openFile.flush();
     while(1){
         auto now = Clock::now();
         double elapsed = chrono::duration<double>(now - start).count();
         double dt = elapsed - previousTime;
-
-        if(elapsed >= 5.0){
+        
+        /*if(elapsed >= 5.0){
             break;
-        }
+        }*/
 
         if(GetCursorPos(&current)){
             cout << "Time: " << elapsed << "s " << current.x << " " << current.y;
@@ -49,6 +60,7 @@ int main(){
                 
                 if(distance > 0){
                     moveTime += dt;
+                    lastActivityTime = elapsed;
                 }
                 cout << " Distance: " << distance ;
                 totalDistance += distance;
@@ -91,15 +103,15 @@ int main(){
         // Detect left click
         if(currentLeft && !previousLeft){
             leftClickCount++;
+            lastActivityTime = elapsed;
             cout << "Left click detected" << endl;
-            
         }
 
         // Detect right click
         if(currentRight && !previousRight){
             rightClickCount++;
+            lastActivityTime = elapsed;
             cout << "Right click detected" << endl;
-            
         }
 
         // Update previous states
@@ -107,45 +119,76 @@ int main(){
         previousRight = currentRight;
         //wait for next record
         this_thread::sleep_for(chrono::milliseconds(50));
+        if(elapsed - intervalBegin >= 5.0){
+            double duration = elapsed - intervalBegin;
+            leftSpeed = leftClickCount / duration;
+            rightSpeed = rightClickCount / duration;
+            avgSpeed = totalDistance / duration;
+            double totalClickSpeed = (leftClickCount + rightClickCount) / duration;
+            bool activity =(moveTime > 0 || leftClickCount > 0 || rightClickCount > 0);
+            openFile.clear();
+            openFile.seekp(insertPos);
+            if(!first) openFile << ",\n";
+            openFile << "{\n";
+
+            openFile << "\"total_moving_time\": "
+                     << moveTime << ",\n";
+
+            openFile << "\"total_distance\": "
+                     << totalDistance << ",\n";
+
+            openFile << "\"average_speed\": "
+                     << avgSpeed << ",\n";
+
+            openFile << "\"left_clicks\": "
+                     << leftClickCount << ",\n";
+
+            openFile << "\"right_clicks\": "
+                     << rightClickCount << ",\n";
+
+            openFile << "\"left_click_speed\": "
+                     << leftSpeed << ",\n";
+
+            openFile << "\"right_click_speed\": "
+                     << rightSpeed << ",\n";
+
+            openFile << "\"total_click_speed\": "
+                     << totalClickSpeed << ",\n";
+    
+            openFile << "\"last_activity_time\": "
+                     << lastActivityTime << ",\n";
+
+            openFile << "\"activity\": "
+             << (activity ? "true" : "false") << "\n";
+
+            openFile << "}";
+
+            // Finish any buffered output before locating the end
+            openFile.flush();
+
+            insertPos = openFile.tellp();
+
+            // Write closing JSON structure
+            openFile << "\n]}\n";
+            openFile.flush();
+            cout << "Total moving time: " << moveTime << " s Total distance: " << totalDistance << endl;
+            first = false;
+
+            // Reset counters for the next interval
+            intervalBegin = elapsed;
+            moveTime = 0;
+            totalDistance = 0;
+            leftClickCount = 0;
+            rightClickCount = 0;
+            avgSpeed = 0;
+            
+            
+        }
+        if(GetAsyncKeyState(VK_ESCAPE) & 0x8000){
+            break;
+        }
     }
-    double duration = chrono::duration<double>(Clock::now() - start).count();
-    leftSpeed = leftClickCount / duration;
-    rightSpeed = rightClickCount / duration;
-    double totalClickSpeed = (leftClickCount + rightClickCount) / duration;
-    if(!first){
-        openFile << ",\n";
-    }
-    openFile << "{\n";
-
-    openFile << "\"total_moving_time\": "
-             << moveTime << ",\n";
-
-    openFile << "\"total_distance\": "
-             << totalDistance << ",\n";
-
-    openFile << "\"average_speed\": "
-             << avgSpeed << ",\n";
-
-    openFile << "\"left_clicks\": "
-             << leftClickCount << ",\n";
-
-    openFile << "\"right_clicks\": "
-             << rightClickCount << ",\n";
-
-    openFile << "\"left_click_speed\": "
-             << leftSpeed << ",\n";
-
-    openFile << "\"right_click_speed\": "
-             << rightSpeed << ",\n";
-
-    openFile << "\"total_click_speed\": "
-             << totalClickSpeed << "\n";
-
-    openFile << "}\n";
-
     openFile.close();
-    first = false;
-    cout << "Total moving time: " << moveTime << " s Total distance: " << totalDistance << endl;
     
     return 0;
 }
