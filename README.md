@@ -37,5 +37,5 @@ Aadi Aggarwal
 Attributions：
 James Meng: designed mouse monitoring, implemented algorithm of mouse and keyboard
 Henry Wang: designed blink reduction monitoring, implemented algorithm of blink reduction, viewing position change
-Elaine Han: designed keyboard monitoring
+Elaine Han: designed keyboard monitoring and implemented the main function to integrate the calculations and monitor outputs
 Aadi Aggarwal: designed posture check (determining slump time, and if person if at their desk or not)
